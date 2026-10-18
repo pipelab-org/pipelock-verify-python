@@ -498,3 +498,68 @@ def test_legacy_signature_whitespace_fails_closed() -> None:
     result = verify_evidence(receipt, public_key_hex=GOLDEN_KEY)
     assert not result.valid
     assert "decoding signature" in (result.error or "")
+
+
+@pytest.mark.parametrize("value", [0, 1, 2**64 - 1])
+def test_current_drift_numeric_windows(value: int) -> None:
+    key = Ed25519PrivateKey.generate()
+    receipt = _golden()
+    receipt["payload_kind"] = "contract_drift"
+    receipt["payload"] = {
+        "contract_hash": "contract",
+        "rule_id": "rule",
+        "drift_kind": "negative",
+        "missed_windows": value,
+    }
+    _resign(receipt, key)
+    result = verify(receipt, _key_hex(key))
+    assert result.valid, result.error
+
+
+@pytest.mark.parametrize("value", ["1", -1, True, 2**64])
+def test_current_drift_rejects_invalid_windows(value: Any) -> None:
+    key = Ed25519PrivateKey.generate()
+    receipt = _golden()
+    receipt["payload_kind"] = "contract_drift"
+    receipt["payload"] = {
+        "contract_hash": "contract",
+        "rule_id": "rule",
+        "drift_kind": "negative",
+        "missed_windows": value,
+    }
+    _resign(receipt, key)
+    result = verify(receipt, _key_hex(key))
+    assert not result.valid
+    assert "missed_windows" in (result.error or "")
+
+
+@pytest.mark.parametrize("value", [["accepted"], {"value": "accepted"}])
+def test_current_outcome_wrong_type_returns_error(value: Any) -> None:
+    key = Ed25519PrivateKey.generate()
+    receipt = _golden("valid_evidence_receipt_promote_committed.json")
+    receipt["payload"]["validation_outcome"] = value
+    _resign(receipt, key)
+    result = verify_evidence(receipt, public_key_hex=_key_hex(key))
+    assert not result.valid
+    assert "validation_outcome" in (result.error or "")
+
+
+def test_current_span_uppercase_artifact_digests() -> None:
+    key = Ed25519PrivateKey.generate()
+    receipt = _golden("valid_evidence_receipt_proxy_decision_with_spans.json")
+    for field in ("pipelock_binary_digest", "rules_bundle_digest"):
+        receipt["payload"]["source_spans"][0][field] = "sha256:" + "AB" * 32
+    _resign(receipt, key)
+    result = verify(receipt, _key_hex(key))
+    assert result.valid, result.error
+
+
+@pytest.mark.parametrize("field", ["char_offset", "char_length"])
+def test_current_span_rejects_overflowing_offsets(field: str) -> None:
+    key = Ed25519PrivateKey.generate()
+    receipt = _golden("valid_evidence_receipt_proxy_decision_with_spans.json")
+    receipt["payload"]["source_spans"][0][field] = 2**63
+    _resign(receipt, key)
+    result = verify(receipt, _key_hex(key))
+    assert not result.valid
+    assert field in (result.error or "")

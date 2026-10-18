@@ -241,6 +241,7 @@ class EvidenceVerifyResult:
 # Go revision this verifier tracks. Source-span enums are the registry
 # constants; integer bounds are the uint64 fields in those structs.
 _UINT64_MAX = 2**64 - 1
+_INT64_MAX = 2**63 - 1
 _SHA256_PREFIX = "sha256:"
 _LOWER_HEX64 = re.compile(r"[0-9a-f]{64}")
 _HEX64 = re.compile(r"[0-9a-fA-F]{64}")
@@ -327,13 +328,15 @@ def _schema_for(payload_kind: str) -> dict[str, bool] | None:
     }.get(payload_kind)
 
 
-def _sha256_wire(value: Any, label: str) -> str | None:
+def _sha256_wire(value: Any, label: str, *, lowercase: bool = True) -> str | None:
+    hex_pattern = _LOWER_HEX64 if lowercase else _HEX64
     if (
         not isinstance(value, str)
         or not value.startswith(_SHA256_PREFIX)
-        or _LOWER_HEX64.fullmatch(value[len(_SHA256_PREFIX) :]) is None
+        or hex_pattern.fullmatch(value[len(_SHA256_PREFIX) :]) is None
     ):
-        return f"{label} must be sha256:<64 lowercase hex>"
+        alphabet = "lowercase hex" if lowercase else "hex"
+        return f"{label} must be sha256:<64 {alphabet}>"
     return None
 
 
@@ -351,7 +354,7 @@ def _string_list(value: Any, label: str) -> str | None:
 
 def _strict_leaf_types(payload: dict[str, Any], context: str = "payload") -> str | None:
     for field, value in payload.items():
-        if field in _INT_FIELDS:
+        if field in _INT_FIELDS or field == "missed_windows":
             if value is None:
                 continue
             if err := _uint64(value, f"{context} {field}"):
@@ -429,7 +432,7 @@ def _validate_source_span(span: Any, index: int) -> str | None:
     if not _view_allowed(view):
         return f"{label} normalized_view {view!r} is not allowed"
     for name in ("pipelock_binary_digest", "rules_bundle_digest", "policy_hash"):
-        if err := _sha256_wire(span[name], f"{label} {name}"):
+        if err := _sha256_wire(span[name], f"{label} {name}", lowercase=name == "policy_hash"):
             return err
     if not _transform_profile_allowed(span["transform_profile"]):
         return f"{label} transform_profile {span['transform_profile']!r} is not allowed"
@@ -446,9 +449,19 @@ def _validate_source_span(span: Any, index: int) -> str | None:
     if has_offset:
         offset = span["char_offset"]
         length = span["char_length"]
-        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        if (
+            isinstance(offset, bool)
+            or not isinstance(offset, int)
+            or offset < 0
+            or offset > _INT64_MAX
+        ):
             return f"{label} char_offset must be a non-negative integer"
-        if isinstance(length, bool) or not isinstance(length, int) or length <= 0:
+        if (
+            isinstance(length, bool)
+            or not isinstance(length, int)
+            or length <= 0
+            or length > _INT64_MAX
+        ):
             return f"{label} char_length must be a positive integer"
         if not _offsets_allowed(view):
             return f"{label} char_offset is not allowed for normalized_view {view!r}"
@@ -530,19 +543,14 @@ def validate_current_payload(payload_kind: str, payload: Any) -> str | None:
         if err := _strict_leaf_types(payload):
             return err
         return _validate_shadow_aggregation_current(payload.get("aggregation"))
-    if err := _validate_payload(payload_kind, payload):
-        return err
     schema = _schema_for(payload_kind)
     if schema is None:
         return f"no validator for payload_kind {payload_kind!r}"
+    if err := _check_fields(payload, schema):
+        return err
     if err := _strict_leaf_types(payload):
         return err
-    if (
-        payload_kind == "contract_promote_committed"
-        or payload_kind == "contract_rollback_committed"
-    ):
-        return None
-    return None
+    return _validate_payload(payload_kind, payload)
 
 
 def _verify_current_schema_evidence(
