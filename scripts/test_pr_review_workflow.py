@@ -190,11 +190,18 @@ MIGRATED_WORKFLOWS = (
 )
 
 
+def git_environment():
+    """Isolate explicit repository reads from Git's inherited environment."""
+    # git(1) reserves GIT_* for repository selection and configuration.
+    return {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
+
+
 def git_output(root, *arguments):
     """Read repository objects without checking out or executing proposed files."""
     return subprocess.check_output(
         ["git", "-C", str(root), *arguments],
         stderr=subprocess.PIPE,
+        env=git_environment(),
     )
 
 
@@ -530,6 +537,9 @@ class SharedMigrationTest(unittest.TestCase):
                 self.write(name, b"name: existing CI\n")
 
     def git(self, *arguments):
+        environment = git_environment()
+        environment["GIT_CONFIG_GLOBAL"] = os.devnull
+        environment["GIT_CONFIG_NOSYSTEM"] = "1"
         return subprocess.check_output(
             [
                 "git",
@@ -539,9 +549,12 @@ class SharedMigrationTest(unittest.TestCase):
                 "user.name=Test",
                 "-c",
                 "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
                 *arguments,
             ],
             stderr=subprocess.PIPE,
+            env=environment,
         )
 
     def write(self, name, data):
@@ -565,6 +578,43 @@ class SharedMigrationTest(unittest.TestCase):
         )
         self.write(".github/workflows/review-caller-contract.yaml", EXPECTED_CONTRACTS[0].encode())
         self.commit()
+
+    def test_git_calls_ignore_inherited_repository(self):
+        with tempfile.TemporaryDirectory() as directory:
+            outer = pathlib.Path(directory)
+            subprocess.check_output(["git", "init", "-q", str(outer)], env=git_environment())
+            inherited = {
+                "GIT_DIR": str(outer / ".git"),
+                "GIT_WORK_TREE": str(outer),
+                "GIT_INDEX_FILE": str(outer / ".git/index"),
+                "GIT_OBJECT_DIRECTORY": str(outer / ".git/objects"),
+            }
+            with mock.patch.dict(os.environ, inherited):
+                self.assertEqual(
+                    pathlib.Path(
+                        git_output(self.root, "rev-parse", "--show-toplevel").decode().strip()
+                    ),
+                    self.root,
+                )
+                self.assertEqual(
+                    pathlib.Path(self.git("rev-parse", "--show-toplevel").decode().strip()),
+                    self.root,
+                )
+                self.migrate()
+                self.assertTrue(shared_migration(self.caller))
+            self.assertFalse((outer / ".git/index").exists())
+            with self.assertRaises(subprocess.CalledProcessError):
+                git_output(outer, "rev-parse", "--verify", "HEAD")
+
+    def test_fixture_ignores_user_signing_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = pathlib.Path(directory) / "gitconfig"
+            config.write_text(
+                "[commit]\n gpgsign = true\n[gpg]\n program = nonexistent-test-signer\n"
+            )
+            with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(config)}):
+                self.migrate()
+                self.assertTrue(shared_migration(self.caller))
 
     def test_legacy_remains_approved(self):
         self.legacy()
