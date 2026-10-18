@@ -61,6 +61,11 @@ def _print_chain(result: ChainResult, path: Path) -> None:
         return
     print(f"CHAIN VALID: {path}")
     print(f"  Receipts:  {result.receipt_count}")
+    if result.evidence_count:
+        pin = "pinned" if result.evidence_key_pinned else "from first receipt, not pinned"
+        print(f"  Evidence:  {result.evidence_count} (signatures and links verified)")
+        print(f"  Evidence key: {result.evidence_signer_key_id} ({pin})")
+        print(f"  Evidence root: {result.evidence_root_hash}")
     if result.final_seq is not None:
         print(f"  Final seq: {result.final_seq}")
     if result.root_hash:
@@ -92,6 +97,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "expected signer public key, hex-encoded. When omitted, the "
             "embedded signer_key is trusted; chain mode pins it to the "
             "first receipt and enforces consistency across the chain."
+        ),
+    )
+    parser.add_argument(
+        "--expected-signer-key-id",
+        dest="expected_signer_key_id",
+        help=(
+            "v2 evidence receipts only: required signature.signer_key_id. "
+            "A mismatch fails, as does using it with no evidence receipts."
         ),
     )
     parser.add_argument(
@@ -143,13 +156,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.public_key_hex,
             session_id=args.session_id,
             rotation_endorsements=endorsements,
+            expected_signer_key_id=args.expected_signer_key_id,
         )
         # Empty files are rejected at the CLI layer to match the Go CLI's
         # behavior (internal/cli/signing/receipt.go returns an error when
         # the extracted receipt list is empty). The library function keeps
         # the permissive "empty is vacuously valid" shape that mirrors
         # Go's receipt.VerifyChain.
-        if chain_result.valid and chain_result.receipt_count == 0:
+        if (
+            chain_result.valid
+            and chain_result.receipt_count == 0
+            and chain_result.evidence_count == 0
+        ):
             print(f"No receipts found in {path}")
             return 1
         _print_chain(chain_result, path)
@@ -161,7 +179,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"FAILED: {path}: {exc}", file=sys.stderr)
         return 1
 
-    single_result = verify(data, args.public_key_hex)
+    single_result = verify(
+        data, args.public_key_hex, expected_signer_key_id=args.expected_signer_key_id
+    )
     _print_single(single_result, path)
     return 0 if single_result.valid else 1
 
