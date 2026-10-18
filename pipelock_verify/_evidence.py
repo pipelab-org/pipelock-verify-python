@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
@@ -235,6 +237,369 @@ class EvidenceVerifyResult:
     timestamp: str | None = None
 
 
+# Current-schema payload rules published by internal/contract/receipt at the
+# Go revision this verifier tracks. Source-span enums are the registry
+# constants; integer bounds are the uint64 fields in those structs.
+_UINT64_MAX = 2**64 - 1
+_INT64_MAX = 2**63 - 1
+_SHA256_PREFIX = "sha256:"
+_LOWER_HEX64 = re.compile(r"[0-9a-f]{64}")
+_HEX64 = re.compile(r"[0-9a-fA-F]{64}")
+_TRANSFORM_PREFIX = "pipelock-transform-v"
+_HMAC_MATCH_PREFIX = "hmac-sha256:"
+_DLP_NORMALIZED_PREFIX = "dlp_normalized:"
+_SOURCE_KINDS = frozenset(
+    {
+        "http_request_url",
+        "http_response",
+        "mcp_tool_result",
+        "mcp_tool_args",
+    }
+)
+_NORMALIZED_VIEWS = frozenset(
+    {
+        "sanitized_target",
+        "for_matching",
+        "for_matching:invisible_spaced",
+        "leetspeak:for_matching",
+        "vowel_fold:for_matching",
+        "for_matching:base64_decoded",
+        "for_matching:hex_decoded",
+        "dlp_normalized",
+    }
+)
+_OFFSETS_ALLOWED_VIEWS = frozenset({"sanitized_target", "dlp_normalized"})
+_STRING_LIST_FIELDS = frozenset(
+    {
+        "policy_sources",
+        "ratified_rule_ids",
+        "authorizer_signatures",
+        "exemplar_ids",
+    }
+)
+_SOURCE_SPAN_FIELDS: dict[str, bool] = {
+    "source_id": True,
+    "source_kind": True,
+    "normalized_view": True,
+    "pipelock_binary_digest": True,
+    "rules_bundle_digest": True,
+    "transform_profile": True,
+    "policy_hash": True,
+    "rule_id": True,
+    "bundle": False,
+    "bundle_version": False,
+    "char_offset": False,
+    "char_length": False,
+    "match_hash": True,
+    "match_hash_alg": True,
+    "match_class": True,
+    "redacted_sample": False,
+}
+_SPAN_REQUIRED_STRINGS = (
+    "source_id",
+    "source_kind",
+    "normalized_view",
+    "pipelock_binary_digest",
+    "rules_bundle_digest",
+    "transform_profile",
+    "policy_hash",
+    "rule_id",
+    "match_hash",
+    "match_hash_alg",
+    "match_class",
+)
+
+
+def _schema_for(payload_kind: str) -> dict[str, bool] | None:
+    return {
+        "proxy_decision": _PROXY_DECISION_FIELDS,
+        "contract_ratified": _CONTRACT_RATIFIED_FIELDS,
+        "contract_promote_intent": _CONTRACT_PROMOTE_INTENT_FIELDS,
+        "contract_promote_committed": _CONTRACT_PROMOTE_COMMITTED_FIELDS,
+        "contract_rollback_authorized": _CONTRACT_ROLLBACK_AUTHORIZED_FIELDS,
+        "contract_rollback_committed": _CONTRACT_ROLLBACK_COMMITTED_FIELDS,
+        "contract_demoted": _CONTRACT_DEMOTED_FIELDS,
+        "contract_expired": _CONTRACT_EXPIRED_FIELDS,
+        "contract_drift": _CONTRACT_DRIFT_FIELDS,
+        "shadow_delta": _SHADOW_DELTA_FIELDS,
+        "opportunity_missing": _OPPORTUNITY_MISSING_FIELDS,
+        "key_rotation": _KEY_ROTATION_FIELDS,
+        "contract_redaction_request": _CONTRACT_REDACTION_REQUEST_FIELDS,
+    }.get(payload_kind)
+
+
+def _sha256_wire(value: Any, label: str, *, lowercase: bool = True) -> str | None:
+    hex_pattern = _LOWER_HEX64 if lowercase else _HEX64
+    if (
+        not isinstance(value, str)
+        or not value.startswith(_SHA256_PREFIX)
+        or hex_pattern.fullmatch(value[len(_SHA256_PREFIX) :]) is None
+    ):
+        alphabet = "lowercase hex" if lowercase else "hex"
+        return f"{label} must be sha256:<64 {alphabet}>"
+    return None
+
+
+def _uint64(value: Any, label: str) -> str | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > _UINT64_MAX:
+        return f"{label} must be a uint64"
+    return None
+
+
+def _string_list(value: Any, label: str) -> str | None:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return f"{label} must be a list of strings"
+    return None
+
+
+def _strict_leaf_types(payload: dict[str, Any], context: str = "payload") -> str | None:
+    for field, value in payload.items():
+        if field in _INT_FIELDS or field == "missed_windows":
+            if value is None:
+                continue
+            if err := _uint64(value, f"{context} {field}"):
+                return err
+        elif field in _STRING_LIST_FIELDS or field in {"aggregation", "source_spans"}:
+            continue
+        elif field == "ratification_decision_per_rule":
+            if not isinstance(value, dict) or not all(
+                isinstance(item, str) for item in value.values()
+            ):
+                return f"{context} ratification_decision_per_rule values must be strings"
+        elif value is not None and not isinstance(value, str):
+            return f"{context} {field} must be a string"
+    for field in _STRING_LIST_FIELDS:
+        if field not in payload:
+            continue
+        # encoding/json marshals a nil slice as null and unmarshals that null
+        # back to a nil slice. exemplar_ids has no omitempty, and a nil slice
+        # has length 0, so a zero delta_sample_count is valid.
+        if field == "exemplar_ids" and payload[field] is None:
+            continue
+        if err := _string_list(payload[field], f"{context} {field}"):
+            return err
+    return None
+
+
+def _rfc3339_rank(value: str) -> tuple[datetime, int] | None:
+    if not _is_valid_rfc3339(value):
+        return None
+    candidate = value[:-1] + "+00:00" if value.endswith("Z") else value
+    match = re.match(
+        r"^(?P<prefix>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})"
+        r"(?:\.(?P<frac>\d{1,9}))?"
+        r"(?P<offset>[+-]\d{2}:\d{2})$",
+        candidate,
+    )
+    if match is None:
+        return None
+    frac = match.group("frac") or ""
+    nanos = int((frac + "000000000")[:9]) if frac else 0
+    try:
+        instant = datetime.fromisoformat(f"{match.group('prefix')}{match.group('offset')}")
+    except ValueError:
+        return None
+    return instant, nanos
+
+
+def _offsets_allowed(view: str) -> bool:
+    return view in _OFFSETS_ALLOWED_VIEWS or (
+        view.startswith(_DLP_NORMALIZED_PREFIX) and len(view) > len(_DLP_NORMALIZED_PREFIX)
+    )
+
+
+def _view_allowed(view: str) -> bool:
+    return view in _NORMALIZED_VIEWS or (
+        view.startswith(_DLP_NORMALIZED_PREFIX) and len(view) > len(_DLP_NORMALIZED_PREFIX)
+    )
+
+
+def _transform_profile_allowed(profile: str) -> bool:
+    if not profile.startswith(_TRANSFORM_PREFIX) or len(profile) == len(_TRANSFORM_PREFIX):
+        return False
+    return all("0" <= char <= "9" for char in profile[len(_TRANSFORM_PREFIX) :])
+
+
+def _validate_source_span(span: Any, index: int) -> str | None:
+    label = f"source_spans[{index}]"
+    if not isinstance(span, dict):
+        return f"{label} must be an object"
+    if err := _check_fields(span, _SOURCE_SPAN_FIELDS, context=label):
+        return err
+    for name in _SPAN_REQUIRED_STRINGS:
+        value = span.get(name)
+        if not isinstance(value, str) or value == "":
+            return f"{label} {name} is required"
+    for name in ("bundle", "bundle_version", "redacted_sample"):
+        if name in span and span[name] is not None and not isinstance(span[name], str):
+            return f"{label} {name} must be a string"
+    if span["source_kind"] not in _SOURCE_KINDS:
+        return f"{label} source_kind {span['source_kind']!r} is not allowed"
+    view = span["normalized_view"]
+    if not _view_allowed(view):
+        return f"{label} normalized_view {view!r} is not allowed"
+    for name in ("pipelock_binary_digest", "rules_bundle_digest", "policy_hash"):
+        if err := _sha256_wire(span[name], f"{label} {name}", lowercase=name == "policy_hash"):
+            return err
+    if not _transform_profile_allowed(span["transform_profile"]):
+        return f"{label} transform_profile {span['transform_profile']!r} is not allowed"
+    if span["match_hash_alg"] != "hmac-sha256":
+        return f"{label} match_hash_alg {span['match_hash_alg']!r} is not allowed"
+    digest = span["match_hash"][len(_HMAC_MATCH_PREFIX) :]
+    if not span["match_hash"].startswith(_HMAC_MATCH_PREFIX) or _HEX64.fullmatch(digest) is None:
+        return f"{label} match_hash must be hmac-sha256:<64 hex>"
+    has_offset = "char_offset" in span and span["char_offset"] is not None
+    has_length = "char_length" in span and span["char_length"] is not None
+    if has_offset != has_length:
+        missing = "char_length" if has_offset else "char_offset"
+        return f"{label} {missing} is required"
+    if has_offset:
+        offset = span["char_offset"]
+        length = span["char_length"]
+        if (
+            isinstance(offset, bool)
+            or not isinstance(offset, int)
+            or offset < 0
+            or offset > _INT64_MAX
+        ):
+            return f"{label} char_offset must be a non-negative integer"
+        if (
+            isinstance(length, bool)
+            or not isinstance(length, int)
+            or length <= 0
+            or length > _INT64_MAX
+        ):
+            return f"{label} char_length must be a positive integer"
+        if not _offsets_allowed(view):
+            return f"{label} char_offset is not allowed for normalized_view {view!r}"
+    return None
+
+
+def _validate_shadow_aggregation_current(agg: Any) -> str | None:
+    if not isinstance(agg, dict):
+        return "payload aggregation must be an object"
+    fields = dict(_SHADOW_DELTA_AGGREGATION_FIELDS)
+    # A missing key and a JSON null both become a nil slice in Go, length 0.
+    fields["exemplar_ids"] = False
+    if err := _check_fields(agg, fields, context="aggregation"):
+        return err
+    if err := _strict_leaf_types(agg, "aggregation"):
+        return err
+    start = _rfc3339_rank(agg.get("window_start", ""))
+    end = _rfc3339_rank(agg.get("window_end", ""))
+    if start is None:
+        return f"aggregation.window_start is not valid RFC 3339: {agg.get('window_start')!r}"
+    if end is None:
+        return f"aggregation.window_end is not valid RFC 3339: {agg.get('window_end')!r}"
+    if end <= start:
+        return "aggregation.window_end must be after window_start"
+    if agg["lossless_count"] == 0:
+        return "aggregation.lossless_count is required"
+    exemplars = agg.get("exemplar_ids", [])
+    if exemplars is None:
+        exemplars = []
+    if err := _string_list(exemplars, "aggregation.exemplar_ids"):
+        return err
+    if any(item == "" for item in exemplars):
+        return "aggregation.exemplar_ids contains an empty id"
+    if agg["delta_sample_count"] != len(exemplars):
+        return "aggregation.delta_sample_count must equal the number of exemplar_ids"
+    if agg["delta_sample_count"] > agg["lossless_count"]:
+        return "aggregation.delta_sample_count exceeds lossless_count"
+    return None
+
+
+def _validate_proxy_decision_current(payload: dict[str, Any], *, spans: bool) -> str | None:
+    schema = dict(_PROXY_DECISION_FIELDS)
+    schema["live_verdict"] = False
+    if spans:
+        schema["source_spans"] = True
+    if err := _check_fields(payload, schema):
+        return err
+    if err := _strict_leaf_types(payload):
+        return err
+    if err := _string_list(payload.get("policy_sources"), "payload policy_sources"):
+        return err
+    if not spans:
+        return None
+    source_spans = payload.get("source_spans")
+    if not isinstance(source_spans, list) or not source_spans:
+        return "payload source_spans is required"
+    for index, span in enumerate(source_spans):
+        if err := _validate_source_span(span, index):
+            return err
+    return None
+
+
+def validate_current_payload(payload_kind: str, payload: Any) -> str | None:
+    """Validate a current-schema payload the way Go ``EvidenceReceipt.Validate`` does.
+
+    The older ``verify_evidence`` path keeps its own checker. This one is the
+    current envelope, including ``proxy_decision_with_spans`` and the
+    shadow-delta aggregation rules in ``registry.go``.
+    """
+    if not isinstance(payload, dict):
+        return "payload must be a JSON object"
+    if payload_kind == "proxy_decision":
+        return _validate_proxy_decision_current(payload, spans=False)
+    if payload_kind == "proxy_decision_with_spans":
+        return _validate_proxy_decision_current(payload, spans=True)
+    if payload_kind == "shadow_delta":
+        if err := _check_fields(payload, _SHADOW_DELTA_FIELDS):
+            return err
+        if err := _strict_leaf_types(payload):
+            return err
+        return _validate_shadow_aggregation_current(payload.get("aggregation"))
+    schema = _schema_for(payload_kind)
+    if schema is None:
+        return f"no validator for payload_kind {payload_kind!r}"
+    if err := _check_fields(payload, schema):
+        return err
+    if err := _strict_leaf_types(payload):
+        return err
+    return _validate_payload(payload_kind, payload)
+
+
+def _verify_current_schema_evidence(
+    receipt: dict[str, Any],
+    public_key_hex: str | None,
+    expected_signer_key_id: str | None,
+    expected_key_purpose: str | None,
+) -> EvidenceVerifyResult:
+    if not public_key_hex:
+        return EvidenceVerifyResult(
+            valid=False,
+            error="public_key_hex is required to verify EvidenceReceipt v2 signatures",
+        )
+    from ._evidence_chain import verify_receipt
+
+    err = verify_receipt(receipt, public_key_hex, expected_signer_key_id)
+    signature = receipt.get("signature")
+    purpose = signature.get("key_purpose") if isinstance(signature, dict) else None
+    signer_key_id = signature.get("signer_key_id") if isinstance(signature, dict) else None
+    if err is None and expected_key_purpose and purpose != expected_key_purpose:
+        err = f"key_purpose {purpose!r} does not match expected {expected_key_purpose!r}"
+    if err is not None:
+        return EvidenceVerifyResult(valid=False, error=err)
+    return EvidenceVerifyResult(
+        valid=True,
+        event_id=receipt.get("event_id") if isinstance(receipt.get("event_id"), str) else None,
+        record_type=receipt.get("record_type")
+        if isinstance(receipt.get("record_type"), str)
+        else None,
+        payload_kind=receipt.get("payload_kind")
+        if isinstance(receipt.get("payload_kind"), str)
+        else None,
+        signer_key_id=signer_key_id if isinstance(signer_key_id, str) else None,
+        key_purpose=purpose if isinstance(purpose, str) else None,
+        chain_seq=receipt.get("chain_seq") if isinstance(receipt.get("chain_seq"), int) else None,
+        chain_prev_hash=receipt.get("chain_prev_hash")
+        if isinstance(receipt.get("chain_prev_hash"), str)
+        else None,
+        timestamp=receipt.get("timestamp") if isinstance(receipt.get("timestamp"), str) else None,
+    )
+
+
 def verify_evidence(
     receipt: dict[str, Any],
     public_key_hex: str | None = None,
@@ -256,6 +621,18 @@ def verify_evidence(
     Returns:
         An :class:`EvidenceVerifyResult`.
     """
+    if (
+        isinstance(receipt, dict)
+        and receipt.get("record_type") == _RECORD_TYPE_EVIDENCE_V2
+        and "canonicalization" in receipt
+    ):
+        return _verify_current_schema_evidence(
+            receipt,
+            public_key_hex,
+            expected_signer_key_id,
+            expected_key_purpose,
+        )
+
     # Envelope structural checks.
     record_type = receipt.get("record_type")
     if record_type != _RECORD_TYPE_EVIDENCE_V2:
@@ -352,6 +729,11 @@ def verify_evidence(
         )
 
     sig_hex = sig_value[len(_SIGNATURE_PREFIX) :]
+    # Go encoding/hex.DecodeString rejects whitespace; bytes.fromhex ignores it.
+    if re.fullmatch(r"[0-9a-fA-F]*", sig_hex) is None:
+        return EvidenceVerifyResult(
+            valid=False, error="decoding signature: invalid hexadecimal encoding"
+        )
     try:
         sig_bytes = bytes.fromhex(sig_hex)
     except ValueError as exc:
@@ -388,6 +770,10 @@ def verify_evidence(
             error="public_key_hex is required to verify EvidenceReceipt v2 signatures",
         )
 
+    if re.fullmatch(r"[0-9a-fA-F]*", public_key_hex) is None:
+        return EvidenceVerifyResult(
+            valid=False, error="decoding public_key: invalid hexadecimal encoding"
+        )
     try:
         pub_key_bytes = bytes.fromhex(public_key_hex)
     except ValueError as exc:
