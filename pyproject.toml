@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pipelock-verify"
 version = "0.4.1"
-description = "Verify Pipelock receipts: ActionReceipt v1 chains and individual EvidenceReceipt v2 envelopes."
+description = "Verify Pipelock receipts: ActionReceipt v1 and wrapped EvidenceReceipt v2 chains."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
@@ -55,8 +55,8 @@ release = [
 
 [project.urls]
 Homepage = "https://pipelab.org"
-Repository = "https://github.com/luckyPipewrench/pipelock-verify-python"
-"Pipelock (Go reference)" = "https://github.com/luckyPipewrench/pipelock"
+Repository = "https://github.com/pipelab-org/pipelock-verify-python"
+"Pipelock (Go reference)" = "https://github.com/pipelab-org/pipelock"
 "Receipt Spec" = "https://pipelab.org/learn/action-receipt-spec/"
 
 [project.scripts]

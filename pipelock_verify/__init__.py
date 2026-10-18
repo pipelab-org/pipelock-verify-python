@@ -30,9 +30,10 @@ Typical usage::
 
 Trust anchors are opt-in. Pass ``public_key_hex`` to pin a specific signer,
 or leave it empty to trust the key embedded in the receipt (chain mode then
-enforces signer consistency across every v1 receipt in the file). This release
-rejects EvidenceReceipt v2 in chain mode; verify v2 receipts individually
-with verify() or verify_evidence().
+enforces signer consistency across every v1 receipt in the file). Chain mode
+also verifies wrapped EvidenceReceipt v2 entries. ``verify()`` and
+``verify_evidence()`` both accept a current v2 envelope; ``verify_evidence()``
+also accepts the older v2 envelope.
 
 Wire format: see https://pipelab.org/learn/action-receipt-spec/ for field
 layout, canonicalization rules, and the exact signing input.

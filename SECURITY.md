@@ -6,7 +6,7 @@ If you discover a security vulnerability in `pipelock-verify`, please report it 
 
 **Do NOT open a public GitHub issue for security vulnerabilities.**
 
-Instead, report via **[GitHub Security Advisories](https://github.com/luckyPipewrench/pipelock-verify-python/security/advisories/new)**.
+Instead, report via **[GitHub Security Advisories](https://github.com/pipelab-org/pipelock-verify-python/security/advisories/new)**.
 
 Include:
 
@@ -34,7 +34,7 @@ In scope:
 Out of scope:
 
 - Vulnerabilities in the underlying `cryptography` library (report to that project)
-- Issues in the Go reference implementation (report via [Pipelock Security Advisories](https://github.com/luckyPipewrench/pipelock/security/advisories/new))
+- Issues in the Go reference implementation (report via [Pipelock Security Advisories](https://github.com/pipelab-org/pipelock/security/advisories/new))
 
 ## Supported Versions
 
