@@ -346,7 +346,7 @@ class ReviewCallerTest(unittest.TestCase):
 class WorkflowInputTest(unittest.TestCase):
     def test_bounded_regular_utf8_file(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = pathlib.Path(tmp) / "caller.yaml"
+            path = pathlib.Path(tmp).resolve() / "caller.yaml"
             path.write_text("name: caller\n", encoding="utf-8")
             self.assertEqual(read_workflow(path), "name: caller\n")
             path.write_bytes(b"x" * (MAX_WORKFLOW_BYTES + 1))
@@ -358,7 +358,7 @@ class WorkflowInputTest(unittest.TestCase):
 
     def test_file_growth_after_stat_is_bounded(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = pathlib.Path(tmp) / "caller.yaml"
+            path = pathlib.Path(tmp).resolve() / "caller.yaml"
             path.write_text("name: caller\n", encoding="utf-8")
             original_fstat = os.fstat
 
@@ -373,7 +373,7 @@ class WorkflowInputTest(unittest.TestCase):
 
     def test_symlink_and_symlink_parent_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp)
+            root = pathlib.Path(tmp).resolve()
             directory = root / "outside"
             directory.mkdir()
             path = directory / "caller.yaml"
@@ -388,7 +388,7 @@ class WorkflowInputTest(unittest.TestCase):
 
     def test_fifo_and_parent_traversal_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = pathlib.Path(tmp) / "caller.yaml"
+            path = pathlib.Path(tmp).resolve() / "caller.yaml"
             os.mkfifo(path)
             with self.assertRaises(ValueError):
                 read_workflow(path)
@@ -399,7 +399,7 @@ class WorkflowInputTest(unittest.TestCase):
         caller = EXPECTED_CALLERS[0].replace("REVIEWER_SHA", APPROVED_REVIEWER_SHAS[0])
         contract = EXPECTED_CONTRACTS[0]
         with tempfile.TemporaryDirectory() as tmp:
-            path = pathlib.Path(tmp) / "workflow.yaml"
+            path = pathlib.Path(tmp).resolve() / "workflow.yaml"
             for expected, check, mutations in [
                 (
                     caller,
@@ -464,8 +464,8 @@ class WorkflowInputTest(unittest.TestCase):
         old = APPROVED_REVIEWER_SHAS[0]
         new = "a" * 40
         with tempfile.TemporaryDirectory() as tmp:
-            caller = pathlib.Path(tmp) / "caller.yaml"
-            contract = pathlib.Path(tmp) / "contract.yaml"
+            caller = pathlib.Path(tmp).resolve() / "caller.yaml"
+            contract = pathlib.Path(tmp).resolve() / "contract.yaml"
             contract.write_text(EXPECTED_CONTRACTS[0], encoding="utf-8")
             for approved, proposed, accepted in [
                 ((old,), old, True),
@@ -490,7 +490,7 @@ class WorkflowInputTest(unittest.TestCase):
     def test_shape_upgrade_expand_migrate_contract(self):
         """Future exact templates can migrate without weakening the comparator."""
         with tempfile.TemporaryDirectory() as tmp:
-            path = pathlib.Path(tmp) / "workflow.yaml"
+            path = pathlib.Path(tmp).resolve() / "workflow.yaml"
             for key, check, old in [
                 ("EXPECTED_CALLERS", validate_caller, EXPECTED_CALLERS[0]),
                 ("EXPECTED_CONTRACTS", validate_contract, EXPECTED_CONTRACTS[0]),
