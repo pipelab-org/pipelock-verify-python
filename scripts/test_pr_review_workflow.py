@@ -175,7 +175,7 @@ SHARED_FILES = {
     ".github/workflows/agent-review.yaml": "644f8a65d0dad6ff62d2502f48650b7a94fb6ae97afad65f96fda042c584caea",
     ".github/agent-review.toml": "fe2ada7eb8715d41c2185fd4abc1a3e6422ec57160438fdbc78facbcc1c8c7ae",
     ".github/workflows/review-caller-contract.yaml": "d304bf0150b7f48dac125f4e697a6c9f3798298f616e1b230707dc9ec9b43895",
-    "scripts/check_agent_review_workflow.py": "969a0930c2aa64e1eff3782144c08646de4f16bd060e8d48ee54ad10a20255ae",
+    "scripts/check_agent_review_workflow.py": "9ea0b8e7433cd70fe7d68abbd19bb71a97f18a646f98da582cc0bb2fe4b8c820",
 }
 MIGRATED_WORKFLOWS = (
     ".github/workflows/agent-review.yaml",
