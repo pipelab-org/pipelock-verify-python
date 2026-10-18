@@ -563,3 +563,24 @@ def test_current_span_rejects_overflowing_offsets(field: str) -> None:
     result = verify(receipt, _key_hex(key))
     assert not result.valid
     assert field in (result.error or "")
+
+
+def test_current_shadow_null_exemplars_match_zero_count() -> None:
+    """Go json.Marshal writes a nil exemplar slice as null, and Validate accepts count 0."""
+    key = Ed25519PrivateKey.generate()
+    receipt = _golden("valid_evidence_receipt_shadow_delta.json")
+    receipt["payload"]["aggregation"]["exemplar_ids"] = None
+    receipt["payload"]["aggregation"]["delta_sample_count"] = 0
+    _resign(receipt, key)
+    result = verify(receipt, _key_hex(key))
+    assert result.valid, result.error
+
+
+def test_current_shadow_null_exemplars_still_fail_nonzero_count() -> None:
+    key = Ed25519PrivateKey.generate()
+    receipt = _golden("valid_evidence_receipt_shadow_delta.json")
+    receipt["payload"]["aggregation"]["exemplar_ids"] = None
+    _resign(receipt, key)
+    result = verify(receipt, _key_hex(key))
+    assert not result.valid
+    assert "delta_sample_count" in (result.error or "")

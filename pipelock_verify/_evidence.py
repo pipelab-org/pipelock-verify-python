@@ -369,7 +369,14 @@ def _strict_leaf_types(payload: dict[str, Any], context: str = "payload") -> str
         elif value is not None and not isinstance(value, str):
             return f"{context} {field} must be a string"
     for field in _STRING_LIST_FIELDS:
-        if field in payload and (err := _string_list(payload[field], f"{context} {field}")):
+        if field not in payload:
+            continue
+        # encoding/json marshals a nil slice as null and unmarshals that null
+        # back to a nil slice. exemplar_ids has no omitempty, and a nil slice
+        # has length 0, so a zero delta_sample_count is valid.
+        if field == "exemplar_ids" and payload[field] is None:
+            continue
+        if err := _string_list(payload[field], f"{context} {field}"):
             return err
     return None
 
@@ -472,7 +479,7 @@ def _validate_shadow_aggregation_current(agg: Any) -> str | None:
     if not isinstance(agg, dict):
         return "payload aggregation must be an object"
     fields = dict(_SHADOW_DELTA_AGGREGATION_FIELDS)
-    # Go treats a missing exemplar list as empty when the sample count is 0.
+    # A missing key and a JSON null both become a nil slice in Go, length 0.
     fields["exemplar_ids"] = False
     if err := _check_fields(agg, fields, context="aggregation"):
         return err
