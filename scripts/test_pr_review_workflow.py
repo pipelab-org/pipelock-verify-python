@@ -188,6 +188,17 @@ MIGRATED_WORKFLOWS = (
     ".github/workflows/review-caller-contract.yaml",
     ".github/workflows/scorecard.yml",
 )
+# Approve the remaining workflow contents from the migration alongside its
+# shared-review files; a matching path alone must not authorize changed CI.
+OTHER_WORKFLOW_DIGESTS = {
+    ".github/workflows/canonical-contract-drift.yml": "afbbb7b23ce46902fb0e919539dce6ff7ebc85ce8213bc353f3439085fa98a06",
+    ".github/workflows/ci.yml": "cf7e7375251b8dfb8d74415cbdadde87b314071dccc244b78a6e4897d239115d",
+    ".github/workflows/codeql.yml": "ed7198f5f9394f6c93f496b9e2371ba23c1eb33ac0fa1c54884a2a7b3d820818",
+    ".github/workflows/dependency-review.yml": "1eff4db66f6a060b8c346d05981fa7273f6a60fe190b8fc695486f06462a5b8c",
+    ".github/workflows/fuzz.yml": "75e1a182dbb34789a308f233062d565ea324c5cd9c36ffddc37916be561f7e81",
+    ".github/workflows/release.yml": "e28954d424acee81dc669a83c9b182c60460941aa3e0da0eb63876eee87aa76b",
+    ".github/workflows/scorecard.yml": "42cb0dedc983fc30e27b4b073f66b24a85834d8d63c0e0c341b8e319c35e9389",
+}
 
 
 def git_environment():
@@ -262,6 +273,11 @@ def shared_migration(path):
     for name, expected in SHARED_FILES.items():
         if hashlib.sha256(read_blob(root, entries[name])).hexdigest() != expected:
             raise ValueError("shared review installation differs from its approved data")
+    if set(OTHER_WORKFLOW_DIGESTS) != set(MIGRATED_WORKFLOWS) - set(SHARED_FILES):
+        raise ValueError("migration workflow approvals are incomplete")
+    for name, expected in OTHER_WORKFLOW_DIGESTS.items():
+        if hashlib.sha256(read_blob(root, inventory[name])).hexdigest() != expected:
+            raise ValueError("migration workflow differs from its approved data")
     return True
 
 
@@ -529,12 +545,18 @@ class SharedMigrationTest(unittest.TestCase):
         self.digests = {
             name: hashlib.sha256(data).hexdigest() for name, data in self.shared_data.items()
         }
-        self.patch = mock.patch.dict(globals(), SHARED_FILES=self.digests)
+        other_data = b"name: CI\njobs:\n  security-scan:\n    runs-on: ubuntu-latest\n"
+        other_digests = {
+            name: hashlib.sha256(other_data).hexdigest() for name in OTHER_WORKFLOW_DIGESTS
+        }
+        self.patch = mock.patch.dict(
+            globals(), SHARED_FILES=self.digests, OTHER_WORKFLOW_DIGESTS=other_digests
+        )
         self.patch.start()
         self.addCleanup(self.patch.stop)
         for name in MIGRATED_WORKFLOWS:
             if name not in self.shared_data:
-                self.write(name, b"name: existing CI\n")
+                self.write(name, other_data)
 
     def git(self, *arguments):
         environment = git_environment()
@@ -642,6 +664,24 @@ class SharedMigrationTest(unittest.TestCase):
                     self.contract.write_bytes(original)
                 else:
                     (self.root / name).unlink()
+                self.commit()
+
+    def test_changed_existing_workflows_are_denied(self):
+        """Matching workflow paths must not admit removed security jobs."""
+        self.migrate()
+        self.assertTrue(shared_migration(self.caller))
+        for name in OTHER_WORKFLOW_DIGESTS:
+            with self.subTest(name=name):
+                original = (self.root / name).read_bytes()
+                self.write(name, b"name: CI\njobs: {}\n")
+                self.commit()
+                for check, path in [
+                    (validate_caller, self.caller),
+                    (validate_contract, self.contract),
+                ]:
+                    with self.assertRaisesRegex(ValueError, "workflow differs"):
+                        check(path)
+                self.write(name, original)
                 self.commit()
 
     def test_partial_and_tampered_installations_are_denied(self):
