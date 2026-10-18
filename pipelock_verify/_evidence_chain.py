@@ -13,9 +13,9 @@ verifier does (``internal/contract/receipt``):
   equal to ``genesis`` and then the SHA-256 hex of the previous receipt's
   JCS bytes, and a single signer across the chain.
 
-Payload bodies are not validated field by field. The signature covers them,
-so they cannot be altered without detection, but their schema is not
-checked here.
+Payload bodies are validated with the current Go payload rules
+(``EvidenceReceipt.Validate``), including ``proxy_decision_with_spans``
+and shadow-delta aggregation. ``secret_egress_decision_v1`` is rejected.
 """
 
 from __future__ import annotations
@@ -230,6 +230,11 @@ def check_structure(receipt: Any) -> str | None:
         return "chain_prev_hash is required"
     if not isinstance(receipt["payload"], dict):
         return "payload must be a JSON object"
+    # Imported lazily: _evidence calls back into this module for current envelopes.
+    from ._evidence import validate_current_payload
+
+    if err := validate_current_payload(payload_kind, receipt["payload"]):
+        return err
     sig = receipt["signature"]
     if not isinstance(sig, dict) or set(sig) != _SIGNATURE_FIELDS:
         return f"signature must carry exactly {sorted(_SIGNATURE_FIELDS)}"

@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from pipelock_verify import verify, verify_chain
+from pipelock_verify import verify, verify_chain, verify_evidence
 from pipelock_verify.__main__ import main
 from pipelock_verify._evidence_chain import receipt_hash, signable_preimage
 
@@ -65,11 +65,26 @@ def _key_hex(key: Ed25519PrivateKey) -> str:
 # ---- Go golden vectors (single mode) ----
 
 
+# Go EvidenceReceipt.Validate rejects this signed fixture: delta_sample_count
+# is 7 and exemplar_ids has 2 entries (registry.go validateShadowDeltaAggregation).
+_SCHEMA_INVALID_GOLDEN = "valid_evidence_receipt_shadow_delta.json"
+
+
 @pytest.mark.parametrize("name", GOLDEN)
 def test_go_golden_vector_verifies(name: str) -> None:
     result = verify(json.dumps(_golden(name)), GOLDEN_KEY)
+    if name == _SCHEMA_INVALID_GOLDEN:
+        assert not result.valid
+        assert "delta_sample_count" in (result.error or "")
+        return
     assert result.valid, result.error
     assert result.signer_key == GOLDEN_KEY
+
+
+def test_current_schema_verify_evidence_accepts_proxy_golden() -> None:
+    result = verify_evidence(_golden(), public_key_hex=GOLDEN_KEY)
+    assert result.valid, result.error
+    assert result.payload_kind == "proxy_decision"
 
 
 @pytest.mark.parametrize("name", GOLDEN)
@@ -78,7 +93,7 @@ def test_go_golden_vector_payload_tamper_fails(name: str) -> None:
     receipt["payload"]["tampered"] = True
     result = verify(receipt, GOLDEN_KEY)
     assert not result.valid
-    assert result.error == "signature verification failed"
+    assert "unknown payload fields" in (result.error or "")
 
 
 def test_single_requires_key_for_current_schema() -> None:
@@ -413,5 +428,73 @@ def test_readme_opening_states_what_is_checked() -> None:
     opening = next(line for line in lines if line.startswith("**Python verifier"))
     assert "flight-recorder wrapping" not in opening
     assert "`evidence_receipt` entries" in opening
-    assert "fields are not validated" in opening
+    assert "payload schema" in opening
+    assert "secret_egress_decision_v1" in opening
     assert "entry hash chain and its other entry types are not checked" in opening
+
+
+def _resign(receipt: dict[str, Any], key: Ed25519PrivateKey) -> None:
+    receipt["signature"]["signer_key_id"] = _key_hex(key)
+    _sign(receipt, key)
+
+
+def test_resigned_schema_invalid_payloads_fail() -> None:
+    """A fresh signature must not make a payload Go Validate rejects look valid."""
+    key = Ed25519PrivateKey.generate()
+    pub = _key_hex(key)
+    cases: list[tuple[str, dict[str, Any], str]] = []
+
+    empty = _golden()
+    empty["payload"] = {}
+    cases.append(("empty", empty, "action_type"))
+
+    unknown = _golden()
+    unknown["payload"]["injected"] = True
+    cases.append(("unknown", unknown, "unknown payload fields"))
+
+    spans = _golden("valid_evidence_receipt_proxy_decision_with_spans.json")
+    spans["payload"]["source_spans"] = []
+    cases.append(("empty spans", spans, "source_spans"))
+
+    bad_kind = _golden("valid_evidence_receipt_proxy_decision_with_spans.json")
+    bad_kind["payload"]["source_spans"][0]["source_kind"] = "file"
+    cases.append(("bad source kind", bad_kind, "source_kind"))
+
+    bad_offset = _golden("valid_evidence_receipt_proxy_decision_with_spans.json")
+    bad_offset["payload"]["source_spans"][0]["normalized_view"] = "for_matching"
+    cases.append(("offset view", bad_offset, "char_offset"))
+
+    counted = _golden("valid_evidence_receipt_shadow_delta.json")
+    cases.append(("shadow count", counted, "delta_sample_count"))
+
+    for name, receipt, message in cases:
+        _resign(receipt, key)
+        result = verify(receipt, pub)
+        assert not result.valid, name
+        assert message in (result.error or ""), name
+
+
+def test_resigned_live_verdict_and_upper_match_hash_pass() -> None:
+    key = Ed25519PrivateKey.generate()
+    pub = _key_hex(key)
+    live = _golden()
+    live["payload"]["live_verdict"] = "block"
+    _resign(live, key)
+    assert verify(live, pub).valid
+
+    spans = _golden("valid_evidence_receipt_proxy_decision_with_spans.json")
+    match = spans["payload"]["source_spans"][0]["match_hash"]
+    prefix, digest = match.split(":", 1)
+    spans["payload"]["source_spans"][0]["match_hash"] = prefix + ":" + digest.upper()
+    _resign(spans, key)
+    result = verify(spans, pub)
+    assert result.valid, result.error
+
+
+def test_legacy_signature_whitespace_fails_closed() -> None:
+    receipt = json.loads((CONFORMANCE / "valid-evidence-proxy-decision.json").read_text())
+    sig = receipt["signature"]["signature"]
+    receipt["signature"]["signature"] = sig[:10] + " " + sig[10:]
+    result = verify_evidence(receipt, public_key_hex=GOLDEN_KEY)
+    assert not result.valid
+    assert "decoding signature" in (result.error or "")
