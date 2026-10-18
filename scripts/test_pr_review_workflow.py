@@ -521,7 +521,7 @@ class SharedMigrationTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = pathlib.Path(self.temporary.name)
+        self.root = pathlib.Path(self.temporary.name).resolve()
         self.git("init", "-q")
         self.caller = self.root / ".github/workflows/pr-review.yaml"
         self.contract = self.caller.with_name("review-caller-contract.yaml")
