@@ -174,8 +174,8 @@ jobs:
 SHARED_FILES = {
     ".github/workflows/agent-review.yaml": "644f8a65d0dad6ff62d2502f48650b7a94fb6ae97afad65f96fda042c584caea",
     ".github/agent-review.toml": "fe2ada7eb8715d41c2185fd4abc1a3e6422ec57160438fdbc78facbcc1c8c7ae",
-    ".github/workflows/review-caller-contract.yaml": "d304bf0150b7f48dac125f4e697a6c9f3798298f616e1b230707dc9ec9b43895",
-    "scripts/check_agent_review_workflow.py": "9ea0b8e7433cd70fe7d68abbd19bb71a97f18a646f98da582cc0bb2fe4b8c820",
+    ".github/workflows/review-caller-contract.yaml": "82d47411b79ddf72af766ae224beb4c95b89585d288b5e1120380c0bbfe91f97",
+    "scripts/check_agent_review_workflow.py": "296b5771bfbadc5aaeac26655d1831d4cd78eb91ab638904a5027ce9a04bcc3c",
 }
 MIGRATED_WORKFLOWS = (
     ".github/workflows/agent-review.yaml",
@@ -191,13 +191,13 @@ MIGRATED_WORKFLOWS = (
 # Approve the remaining workflow contents from the migration alongside its
 # shared-review files; a matching path alone must not authorize changed CI.
 OTHER_WORKFLOW_DIGESTS = {
-    ".github/workflows/canonical-contract-drift.yml": "afbbb7b23ce46902fb0e919539dce6ff7ebc85ce8213bc353f3439085fa98a06",
-    ".github/workflows/ci.yml": "cf7e7375251b8dfb8d74415cbdadde87b314071dccc244b78a6e4897d239115d",
-    ".github/workflows/codeql.yml": "ed7198f5f9394f6c93f496b9e2371ba23c1eb33ac0fa1c54884a2a7b3d820818",
-    ".github/workflows/dependency-review.yml": "1eff4db66f6a060b8c346d05981fa7273f6a60fe190b8fc695486f06462a5b8c",
-    ".github/workflows/fuzz.yml": "75e1a182dbb34789a308f233062d565ea324c5cd9c36ffddc37916be561f7e81",
-    ".github/workflows/release.yml": "e28954d424acee81dc669a83c9b182c60460941aa3e0da0eb63876eee87aa76b",
-    ".github/workflows/scorecard.yml": "42cb0dedc983fc30e27b4b073f66b24a85834d8d63c0e0c341b8e319c35e9389",
+    ".github/workflows/canonical-contract-drift.yml": "d5e343e9159bf29f9be36409baa6476b375b26a34982f6ae3dddcab8418b76e8",
+    ".github/workflows/ci.yml": "27bc0c3679acab524e29923b1d4e9f00e47610a294f8ac0f1b5ef76d45d1ba9c",
+    ".github/workflows/codeql.yml": "8d5f71b8d2d21a39c9f9ab33bf18ce9ede413eea2f94eb3e0f2d142125ea65b3",
+    ".github/workflows/dependency-review.yml": "9a818cc7f85abded2628d7c102e5e83b56c25ed4461b7e2059d72d080e03ac28",
+    ".github/workflows/fuzz.yml": "fb9570ae224a7eb9df31a8e55825644ee84511784c6bed3f3935c233fb3dbdcc",
+    ".github/workflows/release.yml": "75a3e94561770d260d82f04f5c764684195fb88fd645ff0998f7b9c372f41f11",
+    ".github/workflows/scorecard.yml": "31455f772ad4354960e191b81e8b32f92f48fdfa2aa82334e4ed28999d9213fd",
 }
 
 
