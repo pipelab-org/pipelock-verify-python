@@ -1,0 +1,7 @@
+[review]
+instructions = """
+Review receipt verification for strict canonicalization, signature and trust validation, chain integrity, malformed input handling, and compatibility with the published receipt specification. Never accept unverifiable evidence.
+"""
+
+[ignore]
+glob = ["**/go.sum"]
