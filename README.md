@@ -237,6 +237,7 @@ On a single **EvidenceReceipt v2**:
 These checks apply to the older v2 envelope. An envelope that carries
 `canonicalization` (the current Go schema) is checked as in the evidence
 chain below, against a required `public_key_hex`, including payload schema.
+For current envelopes, `signature.signer_key_id` is the lowercase hex public key, so `expected_signer_key_id` must use that same key rather than a label such as `receipt-key-prod`.
 
 On an **ActionReceipt v1 chain**:
 
