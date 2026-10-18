@@ -1,0 +1,38 @@
+{
+  "record_type": "evidence_receipt_v2",
+  "receipt_version": 2,
+  "payload_kind": "proxy_decision",
+  "canonicalization": {
+    "jcs_profile": "pipelock-jcs-rfc8785-nfc-v1",
+    "jcs_version": "rfc8785",
+    "hash_alg": "sha256",
+    "sig_alg": "ed25519",
+    "redaction_ruleset_id": "pipelock-transform-v1",
+    "redaction_ruleset_version": "1",
+    "redaction_ruleset_hash": "sha256:541896788b42651a202448894583a847db9d1aa081c33a7e1f0512303d72527e"
+  },
+  "crit": [
+    "canonicalization"
+  ],
+  "event_id": "01F8MECHZX3TBDSZ7XRADM79XV",
+  "timestamp": "2026-04-25T22:00:00Z",
+  "signature": {
+    "signer_key_id": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    "key_purpose": "receipt-signing",
+    "algorithm": "ed25519",
+    "signature": "ed25519:6cd1df06549a9532218d60aa556d52755a525d084ce0ca766591cad98722d21297b09d01e218b2d515c185867ff2fb861a7e8699b3072cb5864760fb50f86e0b"
+  },
+  "chain_seq": 1,
+  "chain_prev_hash": "sha256:0",
+  "policy_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "payload": {
+    "action_type": "connect",
+    "target": "example.com",
+    "verdict": "allow",
+    "transport": "forward",
+    "policy_sources": [
+      "test"
+    ],
+    "winning_source": "test"
+  }
+}

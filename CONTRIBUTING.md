@@ -2,7 +2,7 @@
 
 Thanks for your interest.
 
-This package is the Python reference verifier for [Pipelock](https://github.com/luckyPipewrench/pipelock) action receipts. The core rule: this implementation must match the Go reference byte-for-byte. Any change that causes verifier divergence needs coordination with the Go side before it lands.
+This package is the Python reference verifier for [Pipelock](https://github.com/pipelab-org/pipelock) action receipts. The core rule: this implementation must match the Go reference byte-for-byte. Any change that causes verifier divergence needs coordination with the Go side before it lands.
 
 ## Prerequisites
 
@@ -87,7 +87,7 @@ The caller runs from the default branch and passes matching immutable workflow a
 
 The read-only caller check runs when the caller workflow, its contract test, or the check workflow changes. It checks the local caller shape and matching pins; it does not execute the external reviewer. The legacy local-runner tests do not define this caller contract.
 
-For source updates and recovery, follow the [shared reviewer guide](https://github.com/luckyPipewrench/pipelock/blob/3e8534e0dd621c62879238cc01d56f7e58e9d096/docs/guides/pr-review.md). A caller change takes effect after it reaches the default branch; a review of its own PR still uses the previous caller.
+For source updates and recovery, follow the [shared reviewer guide](https://github.com/pipelab-org/pipelock/blob/3e8534e0dd621c62879238cc01d56f7e58e9d096/docs/guides/pr-review.md). A caller change takes effect after it reaches the default branch; a review of its own PR still uses the previous caller.
 
 ## Reporting Security Issues
 

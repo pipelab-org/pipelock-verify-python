@@ -1,0 +1,33 @@
+{
+  "record_type": "evidence_receipt_v2",
+  "receipt_version": 2,
+  "payload_kind": "contract_promote_committed",
+  "canonicalization": {
+    "jcs_profile": "pipelock-jcs-rfc8785-nfc-v1",
+    "jcs_version": "rfc8785",
+    "hash_alg": "sha256",
+    "sig_alg": "ed25519",
+    "redaction_ruleset_id": "pipelock-transform-v1",
+    "redaction_ruleset_version": "1",
+    "redaction_ruleset_hash": "sha256:541896788b42651a202448894583a847db9d1aa081c33a7e1f0512303d72527e"
+  },
+  "crit": [
+    "canonicalization"
+  ],
+  "event_id": "01F8MECHZX3TBDSZ7XRADM79XX",
+  "timestamp": "2026-04-25T22:00:00Z",
+  "signature": {
+    "signer_key_id": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    "key_purpose": "receipt-signing",
+    "algorithm": "ed25519",
+    "signature": "ed25519:a153f18d3e43f03670e45f9bbe77e6d9ea874ceebb654aa33abba1f51c57479c7ed0681b5ade54e10ddbc74631caf3d661d1673f5ff56ae8f245ca593ae65907"
+  },
+  "chain_seq": 1,
+  "chain_prev_hash": "sha256:0",
+  "payload": {
+    "target_manifest_hash": "sha256:tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+    "prior_manifest_hash": "sha256:pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
+    "intent_id": "01F8MECHZX3TBDSZ7XRADM79XW",
+    "validation_outcome": "accepted"
+  }
+}

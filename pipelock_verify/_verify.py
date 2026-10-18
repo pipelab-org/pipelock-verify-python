@@ -31,6 +31,8 @@ from ._canonical import (
 from ._common import InvalidReceiptError as InvalidReceiptError
 from ._common import _is_valid_rfc3339 as _is_valid_rfc3339
 from ._common import loads_no_duplicate_keys
+from ._evidence_chain import is_current_schema, verify_evidence_chain
+from ._evidence_chain import verify_receipt as _verify_current_evidence
 from ._rotation import RotationEndorsement, verify_rotation_endorsement
 
 # Wire format constants — keep in sync with internal/receipt/receipt.go.
@@ -46,6 +48,8 @@ _SIGNATURE_LEN = 64
 # Flight-recorder entry type for receipts. Matches
 # internal/receipt/emitter.go recorderEntryType.
 _RECORDER_ENTRY_TYPE = "action_receipt"
+# Entry type that wraps a v2 EvidenceReceipt in its detail.
+_EVIDENCE_ENTRY_TYPE = "evidence_receipt"
 _SESSION_OPEN_GENESIS_PREFIX = "g1:"
 _SESSION_OPEN_GENESIS_LABEL = "pipelock.receipt.session_open.v1"
 _UINT64_MAX = 2**64 - 1
@@ -123,11 +127,18 @@ class ChainResult:
     root_hash: str | None = None
     start_time: str | None = None
     end_time: str | None = None
+    # Wrapped v2 EvidenceReceipt entries, verified as their own chain.
+    evidence_count: int = 0
+    evidence_root_hash: str | None = None
+    evidence_signer_key_id: str | None = None
+    evidence_key_pinned: bool = False
 
 
 def verify(
     source: str | bytes | dict[str, Any],
     public_key_hex: str | None = None,
+    *,
+    expected_signer_key_id: str | None = None,
 ) -> VerifyResult:
     """Verify a single action receipt.
 
@@ -136,7 +147,10 @@ def verify(
         public_key_hex: Optional trust anchor. When supplied, the receipt's
             ``signer_key`` field must match this value (hex-encoded 32-byte
             Ed25519 public key). When omitted, the embedded ``signer_key``
-            is trusted.
+            is trusted. Required for v2 evidence receipts.
+        expected_signer_key_id: v2 evidence receipts only. When given, the
+            receipt's ``signature.signer_key_id`` must equal it. Supplying it
+            for a v1 receipt is an error, because v1 receipts carry no key ID.
 
     Returns:
         A :class:`VerifyResult`. ``result.valid`` is ``True`` only when the
@@ -152,8 +166,10 @@ def verify(
     # Transparently unwrap a flight-recorder entry wrapper if present so
     # callers can feed either bare receipt JSON or an entry dump.
     try:
-        receipt = _extract_receipt(parsed)
-    except InvalidReceiptError as exc:
+        receipt = _extract_evidence(parsed)
+        if receipt is None:
+            receipt = _extract_receipt(parsed)
+    except (InvalidReceiptError, json.JSONDecodeError) as exc:
         return VerifyResult(valid=False, error=str(exc))
     if receipt is None:
         return VerifyResult(
@@ -162,10 +178,32 @@ def verify(
 
     # Version routing: dispatch on record_type field.
     record_type = receipt.get("record_type")
+    if record_type == "evidence_receipt_v2" and is_current_schema(receipt):
+        if not public_key_hex:
+            return VerifyResult(
+                valid=False,
+                error="a public key is required to verify EvidenceReceipt v2 signatures",
+            )
+        err = _verify_current_evidence(receipt, public_key_hex, expected_signer_key_id)
+        signature = receipt.get("signature")
+        return VerifyResult(
+            valid=err is None,
+            error=err,
+            action_id=receipt.get("event_id") if err is None else None,
+            action_type=receipt.get("payload_kind") if err is None else None,
+            signer_key=signature.get("signer_key_id") if isinstance(signature, dict) else None,
+            chain_seq=receipt.get("chain_seq") if err is None else None,
+            chain_prev_hash=receipt.get("chain_prev_hash") if err is None else None,
+            timestamp=receipt.get("timestamp") if err is None else None,
+        )
     if record_type == "evidence_receipt_v2":
         from ._evidence import verify_evidence as _verify_v2
 
-        v2_result = _verify_v2(receipt, public_key_hex=public_key_hex)
+        v2_result = _verify_v2(
+            receipt,
+            public_key_hex=public_key_hex,
+            expected_signer_key_id=expected_signer_key_id,
+        )
         # Wrap EvidenceVerifyResult into a VerifyResult for backward compat.
         return VerifyResult(
             valid=v2_result.valid,
@@ -185,6 +223,14 @@ def verify(
             valid=False,
             error=f"unknown record_type: {record_type!r}",
         )
+    if expected_signer_key_id is not None:
+        return VerifyResult(
+            valid=False,
+            error=(
+                "expected signer key ID applies to v2 evidence receipts only; "
+                "pin a v1 receipt signer with the public key"
+            ),
+        )
 
     return _verify_receipt_dict(receipt, public_key_hex)
 
@@ -195,6 +241,7 @@ def verify_chain(
     *,
     session_id: str = "proxy",
     rotation_endorsements: Sequence[RotationEndorsement | dict[str, Any] | str | bytes] = (),
+    expected_signer_key_id: str | None = None,
 ) -> ChainResult:
     """Verify a receipt chain from a flight recorder JSONL file.
 
@@ -209,19 +256,28 @@ def verify_chain(
         rotation_endorsements: Old-key-signed successor authorizations for
             the chain's rotation boundaries. Supplying endorsements requires ``public_key_hex``;
             the pinned key remains the root of trust.
+        expected_signer_key_id: When given, every wrapped v2 evidence
+            receipt's ``signature.signer_key_id`` must equal it. It is an
+            error to supply it for a file with no evidence receipts.
+
+    Wrapped v2 evidence receipts (recorder entries of type
+    ``evidence_receipt``) are verified as a separate chain: signature,
+    ``chain_seq``, ``chain_prev_hash`` and signer consistency. With
+    ``public_key_hex`` their ``signer_key_id`` must be that key; without it
+    the first evidence receipt's ``signer_key_id`` is used as the key.
 
     Returns:
         A :class:`ChainResult`. On failure, ``broken_at_seq`` and ``error``
         locate the first receipt that failed.
     """
     try:
-        receipts = _read_jsonl(Path(jsonl_path))
+        receipts, evidence = _read_jsonl_entries(Path(jsonl_path))
     except FileNotFoundError as exc:
         return ChainResult(valid=False, error=f"reading file: {exc}")
     except json.JSONDecodeError as exc:
         return ChainResult(valid=False, error=f"parsing JSONL: {exc}")
     except InvalidReceiptError as exc:
-        # _read_jsonl raises this when a line parses as JSON but doesn't
+        # _read_jsonl_entries raises this when a line parses as JSON but doesn't
         # look like a receipt or a flight-recorder entry. Surface it as a
         # normal failure result instead of propagating a raw exception.
         return ChainResult(valid=False, error=f"parsing JSONL: {exc}")
@@ -233,12 +289,35 @@ def verify_chain(
     except (InvalidReceiptError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         return ChainResult(valid=False, error=str(exc))
 
-    return _verify_chain_list(
+    if expected_signer_key_id is not None and not evidence:
+        return ChainResult(
+            valid=False,
+            error="expected signer key ID given but the file has no evidence receipts",
+        )
+
+    result = _verify_chain_list(
         receipts,
         public_key_hex,
         session_id=session_id,
         rotation_endorsements=verified_endorsements,
     )
+    if not result.valid or not evidence:
+        return result
+
+    evidence_result = verify_evidence_chain(evidence, public_key_hex, expected_signer_key_id)
+    if not evidence_result.valid:
+        return ChainResult(
+            valid=False,
+            error=evidence_result.error,
+            broken_at_seq=evidence_result.broken_at_seq,
+            receipt_count=result.receipt_count,
+            evidence_count=evidence_result.count,
+        )
+    result.evidence_count = evidence_result.count
+    result.evidence_root_hash = evidence_result.root_hash
+    result.evidence_signer_key_id = evidence_result.signer_key_id
+    result.evidence_key_pinned = evidence_result.key_pinned
+    return result
 
 
 # ---- internals ----
@@ -334,6 +413,22 @@ def _attach_raw_ext(parsed: dict[str, Any], source_text: str) -> None:
         _attach_receipt_raw_ext(parsed["detail"], raw_detail)
 
 
+def _extract_evidence(parsed: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the detail of an ``evidence_receipt`` recorder entry, else None."""
+    if parsed.get("type") != _EVIDENCE_ENTRY_TYPE:
+        return None
+    detail = parsed.get("detail")
+    if isinstance(detail, (str, bytes)):
+        detail = loads_no_duplicate_keys(detail)
+    # Go decodeEvidenceReceiptDetail rejects absent/null detail; its typed
+    # decoder also rejects arrays and scalars instead of skipping the entry.
+    if not isinstance(detail, dict):
+        raise InvalidReceiptError("evidence detail must be a JSON object")
+    if detail.get("record_type") != "evidence_receipt_v2":
+        raise InvalidReceiptError("evidence detail must carry an EvidenceReceipt v2")
+    return detail
+
+
 def _extract_receipt(parsed: dict[str, Any]) -> dict[str, Any] | None:
     """Pull a receipt dict out of a parsed JSONL line.
 
@@ -346,8 +441,8 @@ def _extract_receipt(parsed: dict[str, Any]) -> dict[str, Any] | None:
        JSON-encoded string, since Go emits it via ``json.RawMessage``).
 
     Returns ``None`` for flight-recorder entries whose type is not a
-    receipt (checkpoints, other event types) so ``_read_jsonl`` can skip
-    them without aborting the chain.
+    receipt (checkpoints, other event types) so the reader can skip them.
+    Wrapped evidence receipts are taken out earlier by ``_extract_evidence``.
     """
     # Flight-recorder entry.
     if "type" in parsed and "detail" in parsed:
@@ -378,9 +473,11 @@ def _extract_receipt(parsed: dict[str, Any]) -> dict[str, Any] | None:
     raise InvalidReceiptError("unrecognized JSONL line: not a receipt or flight-recorder entry")
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+def _read_jsonl_entries(path: Path) -> tuple[list[dict[str, Any]], list[Any]]:
+    """Split a JSONL file into v1 receipts and wrapped v2 evidence receipts."""
     text = path.read_text(encoding="utf-8")
     receipts: list[dict[str, Any]] = []
+    evidence: list[Any] = []
     for lineno, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line:
@@ -391,6 +488,13 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
             raise json.JSONDecodeError(f"line {lineno}: {exc.msg}", exc.doc, exc.pos) from exc
         if not isinstance(parsed, dict):
             raise json.JSONDecodeError(f"line {lineno}: JSONL entry must be a JSON object", line, 0)
+        try:
+            detail = _extract_evidence(parsed)
+        except json.JSONDecodeError as exc:
+            raise InvalidReceiptError(f"line {lineno}: evidence detail: {exc}") from exc
+        if detail is not None:
+            evidence.append(detail)
+            continue
         _attach_raw_ext(parsed, line)
         receipt = _extract_receipt(parsed)
         if receipt is None:
@@ -398,7 +502,7 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
             # instead of failing the whole chain — matches Go ExtractReceipts.
             continue
         receipts.append(receipt)
-    return receipts
+    return receipts, evidence
 
 
 def _reject_unknown_fields(
