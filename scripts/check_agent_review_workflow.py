@@ -10,8 +10,6 @@ import stat
 # then remove the predecessor approval. Never execute proposed target code.
 MAX_WORKFLOW_BYTES = 65536
 APPROVED_REVIEWER_SHAS = (
-    "856e474c1697f3897ccaa156f083e0b9504196e0",
-    "ca0e322521d6d0f8b651546a7d935a93026d71f7",
     "1aa9741927ec5546036506a0ec764e1b41b1a241",
 )
 EXPECTED_CONTRACTS = (
